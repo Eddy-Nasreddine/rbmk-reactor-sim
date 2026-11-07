@@ -11,6 +11,7 @@ from Button import Button
 from Slider import Slider
 from IndicatorLight import IndicatorLight
 from GeigerCounter import GeigerCounter
+from Explosion import Explosion
 
 pygame.mixer.pre_init(44100, -16, 1, 512)
 pygame.init()
@@ -60,6 +61,8 @@ MIN_FISSION_CHANCE = 0.6
 FUEL_BASE_TEMPERATURE = 270
 FUEL_DEGREES_PER_NEUTRON = 1.5
 FUEL_WARNING_TEMPERATURE = 1000
+EXPLOSION_NEUTRONS = 15000
+EXPLOSIONS_ENABLED = True
 
 MW_PER_FISSION = 3100
 POWER_SMOOTHING = 0.02
@@ -84,8 +87,8 @@ PANEL_HEIGHT = SCREEN_HEIGHT - 40
 PANEL_PADDING = 20
 
 BUTTON_WIDTH = PANEL_WIDTH - PANEL_PADDING * 2
-BUTTON_HEIGHT = 45
-BUTTON_SPACING = 15
+BUTTON_HEIGHT = 38
+BUTTON_SPACING = 10
 
 SLIDER_WIDTH = PANEL_WIDTH - PANEL_PADDING * 2
 
@@ -137,6 +140,10 @@ for x in [*range(MODERATOR_START_COLUMN, COLUMNS, MODERATOR_SPACING), COLUMNS]:
 even_rods = control_rods[0::2]
 odd_rods = control_rods[1::2]
 
+core_rect = pygame.Rect(GRID_START_X - CELL_SIZE // 2, GRID_START_Y - CELL_SIZE // 2, COLUMNS * CELL_SIZE, ROWS * CELL_SIZE)
+explosion = Explosion(core_rect, screen.get_size(), NOMINAL_POWER)
+restart_button = Button(core_rect.centerx - 100, core_rect.centery + 20, 200, 50, "Restart")
+
 
 def get_grid_position(rect):
     return (
@@ -183,9 +190,19 @@ manual_control = Button(PANEL_X + PANEL_PADDING, current_y, BUTTON_WIDTH, BUTTON
 current_y += BUTTON_HEIGHT + BUTTON_SPACING
 
 scram = Button(PANEL_X + PANEL_PADDING, current_y, BUTTON_WIDTH, BUTTON_HEIGHT, "SCRAM")
+current_y += BUTTON_HEIGHT + BUTTON_SPACING
+
+explosions_enabled = EXPLOSIONS_ENABLED
+
+
+def get_explosion_label():
+    return "Explosions: On" if explosions_enabled else "Explosions: Off"
+
+
+explosion_toggle = Button(PANEL_X + PANEL_PADDING, current_y, BUTTON_WIDTH, BUTTON_HEIGHT, get_explosion_label())
 current_y += BUTTON_HEIGHT + 50
 
-buttons = [raise_all_rods, lower_all_rods, manual_control, scram]
+buttons = [raise_all_rods, lower_all_rods, manual_control, scram, explosion_toggle]
 
 manual_control_enabled = False
 scram_active = False
@@ -195,9 +212,11 @@ water_line = 0
 voided_tiles = 0
 thermal_power = 0.0
 electric_power = 0.0
+peak_power = 0.0
 frame_count = 0
 
-PUMP_LEVEL = 50
+DEFAULT_PUMP_LEVEL = 50
+PUMP_LEVEL = DEFAULT_PUMP_LEVEL
 pump_slider = Slider(PANEL_X + PANEL_PADDING, current_y, SLIDER_WIDTH, min_value=0, max_value=100, initial_value=PUMP_LEVEL, label="Pump Level", decimals=0, suffix="%")
 current_y += 60
 
@@ -440,10 +459,14 @@ def draw_power_graph():
     pygame.draw.lines(screen, GRAPH_LINE_COLOR, False, points, 2)
 
 
+def get_fuel_celsius():
+    return int(FUEL_BASE_TEMPERATURE + fuel_temperature * FUEL_DEGREES_PER_NEUTRON)
+
+
 def draw_panel():
     screen.blit(panel_surface, panel_rect)
 
-    fuel_celsius = int(FUEL_BASE_TEMPERATURE + fuel_temperature * FUEL_DEGREES_PER_NEUTRON)
+    fuel_celsius = get_fuel_celsius()
     steam = int((voided_tiles + water_line * COLUMNS) / (ROWS * COLUMNS) * 100)
     coolant = int(coolant_level * 100)
     rods_in = int(sum(max(0, rod.rect.bottom - ROD_TOP_Y) for rod in control_rods) / (len(control_rods) * ROD_MODERATOR_HEIGHT) * 100)
@@ -473,6 +496,71 @@ def draw_panel():
         slider.draw(screen)
 
 
+def explode():
+    explosion.trigger([(rod.rect, rod.tip_rect) for rod in control_rods], peak_power, VOLUME / 100)
+    explosion.scorch(reactor_surface)
+
+
+def draw_explosion():
+    explosion.update()
+
+    screen.blit(reactor_surface, (0, 0))
+    explosion.draw(screen)
+
+    if explosion.frame > 30:
+        geiger.click(random.randint(4, 12))
+
+    draw_panel()
+    explosion.draw_overlay(screen)
+
+    if explosion.overlay_visible():
+        restart_button.draw(screen)
+
+    shake = explosion.get_shake()
+    if shake != (0, 0):
+        frame = screen.copy()
+        screen.fill((0, 0, 0))
+        screen.blit(frame, shake)
+
+
+def reset_reactor():
+    global neutrons, fuel_temperature, coolant_level, water_line, voided_tiles
+    global thermal_power, electric_power, peak_power, scram_active, manual_control_enabled
+
+    neutrons = []
+    active_cells.clear()
+    xenon_cells.clear()
+    hot_tiles.clear()
+    disabled_cells.update(cell_grid.values())
+
+    for cell in cell_grid.values():
+        cell.is_xenon = False
+        cell.disabled = True
+        cell.has_iodine = False
+
+    for water in water_grid.values():
+        water.fill()
+
+    for rod in control_rods:
+        rod.set_y(ROD_TOP_Y)
+
+    fuel_temperature = 0.0
+    coolant_level = 1.0
+    water_line = 0
+    voided_tiles = 0
+    thermal_power = 0.0
+    electric_power = 0.0
+    peak_power = 0.0
+    scram_active = False
+    manual_control_enabled = False
+    power_history.extend([0.0] * power_history.maxlen)
+    pump_slider.value = DEFAULT_PUMP_LEVEL
+    explosion.active = False
+
+    refuel_cells()
+    draw_reactor()
+
+
 refuel_cells()
 draw_reactor()
 
@@ -481,12 +569,26 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-        if event.type == pygame.MOUSEBUTTONDOWN:
+        if explosion.overlay_visible():
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                reset_reactor()
+
+            if event.type == pygame.MOUSEBUTTONDOWN and restart_button.clicked(event.pos):
+                reset_reactor()
+
+        elif explosion.active:
+            pass
+
+        elif event.type == pygame.MOUSEBUTTONDOWN:
             if scram.clicked(event.pos):
                 scram_active = True
 
             if manual_control.clicked(event.pos):
                 manual_control_enabled = not manual_control_enabled
+
+            if explosion_toggle.clicked(event.pos):
+                explosions_enabled = not explosions_enabled
+                explosion_toggle.set_text(get_explosion_label())
 
         for slider in sliders:
             slider.handle_event(event)
@@ -496,6 +598,12 @@ while running:
     NEUTRON_TARGET = int(neutron_target_slider.value)
     VOLUME = volume_slider.value
     geiger.volume = VOLUME / 100
+
+    if explosion.active:
+        draw_explosion()
+        pygame.display.flip()
+        clock.tick(60)
+        continue
 
     if scram_active:
         for rod in control_rods:
@@ -555,6 +663,7 @@ while running:
     thermal_power += (fissions * MW_PER_FISSION - thermal_power) * POWER_SMOOTHING
     turbine_power = min(TURBINE_RATING, thermal_power * TURBINE_EFFICIENCY * coolant_level)
     electric_power += (turbine_power - electric_power) * TURBINE_INERTIA
+    peak_power = max(peak_power, thermal_power)
 
     frame_count += 1
     if frame_count % POWER_HISTORY_INTERVAL == 0:
@@ -564,6 +673,10 @@ while running:
 
     for rod in control_rods:
         rod.draw(screen)
+
+    if explosions_enabled and len(neutrons) >= EXPLOSION_NEUTRONS:
+        neutrons = []
+        explode()
 
     pygame.display.flip()
 

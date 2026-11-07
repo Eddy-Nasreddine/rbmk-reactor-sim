@@ -35,9 +35,11 @@ I made it with Python 3.13 and pygame 2.6.1. The window is 1900x1000, so it fits
 - **Raise Rods / Lower Rods**: hold to move all the control rods. Only works when Manual Control is on.
 - **Manual Control**: switches between manual and automatic rod control. The green light means manual is on.
 - **SCRAM**: emergency shutdown. Drives all the rods all the way in over about 20 seconds, and you can't stop it once it starts.
+- **Explosions**: turns the explosion on or off. With it off a runaway just keeps going, so expect the game to start lagging once there are tens of thousands of neutrons. If you want it off every time you start the game, set `EXPLOSIONS_ENABLED = False` at the top of `main.py`.
 - **Pump Level**: how hard the water pumps are working. Lower means less cooling and more boiling, and at 0% the water drains out of the core.
 - **Neutron Target**: in automatic mode the rods move on their own to keep the neutron count around this number.
 - **Volume**: every time uranium splits it makes a Geiger counter click, and this sets how loud that is.
+- **Restart**: shows up after the reactor explodes. You can also press R.
 
 ## The panel
 
@@ -60,6 +62,7 @@ Numbers turn red when things start getting dangerous.
 - Hot fuel is less likely to split, which pulls the power back down when it gets too high.
 - Split fuel slowly turns into xenon, which eats neutrons. At high power the neutrons burn the xenon off as fast as it shows up, but at low power it builds up and can choke the reactor. This is the xenon pit.
 - The control rods have graphite tips. When you hit SCRAM the tips go into the core first and push the water out, so the power actually jumps up before the rods can shut it down.
+- If the neutron count hits 15,000 the reactor explodes. You can change that number with `EXPLOSION_NEUTRONS` at the top of `main.py`.
 
 ## Recreating Chernobyl
 
@@ -67,7 +70,9 @@ Numbers turn red when things start getting dangerous.
 2. Hold Lower Rods until Rods In says about 80%, so the power drops way down. Leave it like that for about a minute and a half while the xenon builds up.
 3. Raise the rods all the way out again. The power won't come back because the core is full of xenon. It's stuck in the xenon pit, which is pretty much where Chernobyl was before the test (theirs was stuck at around 200 MW).
 4. Drop Pump Level to 0%. The water boils off from the top down, nothing is absorbing the neutrons anymore, and within about half a minute the power runs away.
-5. Hit SCRAM right as the power starts climbing. The graphite tips go in first and push the power up even more before the rods can do anything.
+5. Once the power is past about 10,000 MW, hit SCRAM. The graphite tips go in first and push the power up even more, and the reactor explodes.
+
+If you SCRAM earlier than that, the rods can still save it. If you don't SCRAM at all it blows up on its own about 20 seconds after you cut the pumps. The last few seconds before it blows will slow down a bit because of how many neutrons there are.
 
 ## Note
 
